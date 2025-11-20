@@ -138,63 +138,48 @@ class Client:
 		try:
 			self.rtspSocket.connect((self.serverAddr, self.serverPort))
 		except:
-			tkMessageBox.showwarning('Connection Failed', 'Connection to \'%s\' failed.' %self.serverAddr)
+			tkinter.tkMessageBox.showwarning('Connection Failed', 'Connection to \'%s\' failed.' %self.serverAddr)
 	
 	def sendRtspRequest(self, requestCode):
 		"""Send RTSP request to the server."""	
-		#-------------
-		# TO COMPLETE
-		#-------------
-		
+				
 		# Setup request
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
-			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
-			# Write the RTSP request to be sent.
-			# request = ...
+			request = f"SETUP {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nTransport: RTP/UDP; client_port: {self.rtpPort}";
 			
-			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.requestSent = self.SETUP
 		
 		# Play request
 		elif requestCode == self.PLAY and self.state == self.READY:
-			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
-			# Write the RTSP request to be sent.
-			# request = ...
-			
-			# Keep track of the sent request.
-			# self.requestSent = ...
+			request = f"PLAY {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nSession: {self.sessionId}"
+		
+			self.requestSent = self.PLAY
 		
 		# Pause request
 		elif requestCode == self.PAUSE and self.state == self.PLAYING:
-			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
-			# Write the RTSP request to be sent.
-			# request = ...
-			
-			# Keep track of the sent request.
-			# self.requestSent = ...
+			request = f"PAUSE {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nSession: {self.sessionId}"
+
+			self.requestSent = self.PAUSE
 			
 		# Teardown request
 		elif requestCode == self.TEARDOWN and not self.state == self.INIT:
-			# Update RTSP sequence number.
-			# ...
+			self.rtspSeq += 1
 			
-			# Write the RTSP request to be sent.
-			# request = ...
+			request = f"TEARDOWN {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nSession: {self.sessionId}"
 			
-			# Keep track of the sent request.
-			# self.requestSent = ...
+			self.requestSent = self.TEARDOWN
 		else:
 			return
-		
-		# Send the RTSP request using rtspSocket.
-		# ...
+
+		# send message through socket		
+		self.rtspSocket.send(request.encode('utf-8'))
 		
 		print('\nData sent:\n' + request)
 	
