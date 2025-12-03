@@ -61,8 +61,8 @@ class Client:
 		self.teardown["command"] =  self.exitClient
 		self.teardown.grid(row=1, column=3, padx=2, pady=2)
 		
-		# Create a label to display the movie
-		self.label = Label(self.master, height=19)
+		# Create a label to display the movie (larger for HD)
+		self.label = Label(self.master, height=25)
 		self.label.grid(row=0, column=0, columnspan=4, sticky=W+E+N+S, padx=5, pady=5) 
 	
 	def setupMovie(self):
@@ -74,7 +74,10 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
-		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		try:
+			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		except:
+			pass
 
 	def pauseMovie(self):
 		"""Pause button handler."""
@@ -94,7 +97,8 @@ class Client:
 		"""Listen for RTP packets."""
 		while True:
 			try:
-				data = self.rtpSocket.recv(20480)
+				# THAY ĐỔI 1: Tăng buffer size lên 65536 bytes (64KB) cho HD video
+				data = self.rtpSocket.recv(65536)
 				if data:
 					rtpPacket = RtpPacket()
 					rtpPacket.decode(data)
@@ -113,7 +117,6 @@ class Client:
 				# Upon receiving ACK for TEARDOWN request,
 				# close the RTP socket
 				if self.teardownAcked == 1:
-					#self.rtpSocket.shutdown(socket.SHUT_RDWR)
 					self.rtpSocket.close()
 					break
 					
@@ -128,9 +131,13 @@ class Client:
 	
 	def updateMovie(self, imageFile):
 		"""Update the image file as video frame in the GUI."""
-		photo = ImageTk.PhotoImage(Image.open(imageFile))
-		self.label.configure(image = photo, height=288) 
-		self.label.image = photo
+		try:
+			photo = ImageTk.PhotoImage(Image.open(imageFile))
+			# THAY ĐỔI 2: Auto-scale height cho HD video
+			self.label.configure(image=photo, height=photo.height()) 
+			self.label.image = photo
+		except:
+			pass
 		
 	def connectToServer(self):
 		"""Connect to the Server. Start a new RTSP/TCP session."""
@@ -138,7 +145,7 @@ class Client:
 		try:
 			self.rtspSocket.connect((self.serverAddr, self.serverPort))
 		except:
-			tkinter.messageBox.showwarning('Connection Failed', 'Connection to \'%s\' failed.' %self.serverAddr)
+			tkinter.messagebox.showwarning('Connection Failed', 'Connection to \'%s\' failed.' %self.serverAddr)
 	
 	def sendRtspRequest(self, requestCode):
 		"""Send RTSP request to the server."""	
@@ -148,7 +155,7 @@ class Client:
 			threading.Thread(target=self.recvRtspReply).start()
 			self.rtspSeq += 1
 			
-			request = f"SETUP {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nTransport: RTP/UDP; client_port: {self.rtpPort}";
+			request = f"SETUP {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nTransport: RTP/UDP; client_port: {self.rtpPort}"
 			
 			self.requestSent = self.SETUP
 		
@@ -213,57 +220,40 @@ class Client:
 			if self.sessionId == session:
 				if int(lines[0].split(' ')[1]) == 200: 
 					if self.requestSent == self.SETUP:
-						#-------------
-						# TO COMPLETE
-						#-------------
-						# Update RTSP state.
-						# self.state = ...
 						self.state = self.READY
-						
-						# Open RTP port.
 						self.openRtpPort() 
 
 					elif self.requestSent == self.PLAY:
-						# self.state = ...
 						self.state = self.PLAYING
 
 					elif self.requestSent == self.PAUSE:
-						# self.state = ...
 						self.state = self.READY
-						
-						# The play thread exits. A new thread is created on resume.
 						self.playEvent.set()
+						
 					elif self.requestSent == self.TEARDOWN:
-						# self.state = ...
 						self.state = self.INIT
-
-						# Flag the teardownAcked to close the socket.
 						self.teardownAcked = 1 
 	
 	def openRtpPort(self):
 		"""Open RTP socket binded to a specified port."""
-		#-------------
-		# TO COMPLETE
-		#-------------
 		# Create a new datagram socket to receive RTP packets from the server
-		# self.rtpSocket = ...
 		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-		# Set the timeout value of the socket to 0.5sec
-		# ...
-		self.rtpSocket.settimeout(0.5)
+		# THAY ĐỔI 3: Tăng timeout lên 1 giây cho HD video
+		self.rtpSocket.settimeout(1.0)
+		
+		# THAY ĐỔI 4: Tăng receive buffer size cho socket
+		self.rtpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2097152)  # 2MB buffer
 
 		try:
-			# Bind the socket to the address using the RTP port given by the client user
-			# ...
 			self.rtpSocket.bind(("", self.rtpPort))
 		except:
-			tkinter.messageBox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
+			tkinter.messagebox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
 
 	def handler(self):
 		"""Handler on explicitly closing the GUI window."""
 		self.pauseMovie()
-		if tkinter.messageBox.askokcancel("Quit?", "Are you sure you want to quit?"):
+		if tkinter.messagebox.askokcancel("Quit?", "Are you sure you want to quit?"):
 			self.exitClient()
 		else: # When the user presses cancel, resume playing.
 			self.playMovie()
