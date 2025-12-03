@@ -31,7 +31,8 @@ class ServerWorker:
 		"""Receive RTSP request from the client."""
 		connSocket = self.clientInfo['rtspSocket'][0]
 		while True:            
-			data = connSocket.recv(256)
+			# THAY ĐỔI 1: Tăng buffer size lên 4096 bytes cho RTSP requests
+			data = connSocket.recv(4096)
 			if data:
 				print("Data received:\n" + data.decode("utf-8"))
 				self.processRtspRequest(data.decode("utf-8"))
@@ -79,6 +80,9 @@ class ServerWorker:
 				# Create a new socket for RTP/UDP
 				self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 				
+				# THAY ĐỔI 2: Tăng send buffer size cho socket
+				self.clientInfo["rtpSocket"].setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2097152)  # 2MB buffer
+				
 				self.replyRtsp(self.OK_200, seq[1])
 				
 				# Create a new thread and start sending RTP packets
@@ -110,7 +114,9 @@ class ServerWorker:
 	def sendRtp(self):
 		"""Send RTP packets over UDP."""
 		while True:
-			self.clientInfo['event'].wait(0.05) 
+			# THAY ĐỔI 3: Giảm delay xuống 0.04 giây (25 fps) cho video mượt hơn
+			# Có thể điều chỉnh: 0.033 = 30fps, 0.04 = 25fps, 0.05 = 20fps
+			self.clientInfo['event'].wait(0.04) 
 			
 			# Stop sending if request is PAUSE or TEARDOWN
 			if self.clientInfo['event'].isSet(): 
@@ -125,9 +131,6 @@ class ServerWorker:
 					self.clientInfo['rtpSocket'].sendto(self.makeRtp(data, frameNumber),(address,port))
 				except:
 					print("Connection Error")
-					#print('-'*60)
-					#traceback.print_exc(file=sys.stdout)
-					#print('-'*60)
 
 	def makeRtp(self, payload, frameNbr):
 		"""RTP-packetize the video data."""
@@ -136,7 +139,12 @@ class ServerWorker:
 		extension = 0
 		cc = 0
 		marker = 0
-		pt = 26 # MJPEG type
+		############################################
+		############################################
+		pt = 26 # MJPEG type############
+		############################################
+		############################################
+		##############pt = 96 #raw MJPEG
 		seqnum = frameNbr
 		ssrc = 0 
 		
@@ -149,7 +157,6 @@ class ServerWorker:
 	def replyRtsp(self, code, seq):
 		"""Send RTSP reply to the client."""
 		if code == self.OK_200:
-			#print("200 OK")
 			reply = 'RTSP/1.0 200 OK\nCSeq: ' + seq + '\nSession: ' + str(self.clientInfo['session'])
 			connSocket = self.clientInfo['rtspSocket'][0]
 			connSocket.send(reply.encode())
