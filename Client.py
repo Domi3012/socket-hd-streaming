@@ -140,27 +140,29 @@ class Client:
                 
                 total = self._getTotalFramesForUI()
                 
-                # 1. Tính toán tỉ lệ
+                # 1. Tính toán vị trí ĐỎ (Đang xem)
                 played_ratio = min(self.frameNbr / total, 1.0)
-                cached_ratio = min(self.maxCachedFrame / total, 1.0)
-
                 played_w = w * played_ratio
+
+                # 2. Tính toán vị trí XÁM (Real Cache)
+                buffered_frames = self.frameQueue.qsize() 
+                real_cached_frame = self.frameNbr + buffered_frames
+                
+                cached_ratio = min(real_cached_frame / total, 1.0)
                 cached_w = w * cached_ratio
 
-                # 2. Vẽ Nền Đen (Toàn bộ video)
+                # 3. Vẽ Nền Đen
                 self.progressCanvas.create_rectangle(0, 0, w, h, fill="#111111", outline="")
 
-                # 3. Vẽ Thanh Xám (Buffer/Cache - Phần đã tải trước)
-                # Vẽ từ điểm 0 đến điểm maxCachedFrame
-                if cached_w > 0:
-                    self.progressCanvas.create_rectangle(0, 0, cached_w, h, fill="#555555", outline="")
+                # 4. Vẽ Thanh Xám (Từ đầu đến điểm Cache thực tế)
+                if cached_w > played_w:
+                    self.progressCanvas.create_rectangle(played_w, 0, cached_w, h, fill="#666666", outline="")
 
-                # 4. Vẽ Thanh Đỏ (Playback - Phần đang xem)
-                # Vẽ đè lên thanh xám
+                # 5. Vẽ Thanh Đỏ (Đè lên trên)
                 if played_w > 0:
                     self.progressCanvas.create_rectangle(0, 0, played_w, h, fill="#E50914", outline="")
                 
-                # 5. Vẽ cục tròn màu trắng (Knob)
+                # 6. Cục tròn (Knob)
                 self.progressCanvas.create_oval(played_w-5, h/2-5, played_w+5, h/2+5, fill='white', outline='')
                 
             except:
@@ -239,26 +241,29 @@ class Client:
                 try:
                     if self.playEvent.is_set(): break
                     
-                    # --- LOGIC BUFFERING (Giữ nguyên) ---
-                    # Nếu sắp hết frame (dưới 5), tạm dừng để load thêm
-                    if self.frameQueue.qsize() < 5 and not is_buffering:
+                    # --- TÍNH SỐ FRAME CÒN LẠI CỦA VIDEO ---
+                    frames_left_in_video = self.totalFrames - self.frameNbr
+
+                    # --- SỬA LOGIC BUFFERING ---
+                    # Chỉ kích hoạt Buffering khi:
+                    # 1. Queue sắp cạn (< 5)
+                    # 2. VÀ Video vẫn còn dài (còn hơn 20 frame nữa mới hết)
+                    # (Nếu còn < 20 frame thì chạy luôn cho hết, không chờ nữa)
+                    if self.frameQueue.qsize() < 5 and not is_buffering and frames_left_in_video > 20:
                         is_buffering = True
                         print("Buffering...")
                     
-                    # Nếu đang buffering, đợi nạp đủ 20 frame mới chạy
+                    # Nếu đang buffering, kiểm tra điều kiện để chạy tiếp
                     if is_buffering:
-                        if self.frameQueue.qsize() > 20: 
+                        # Chạy tiếp nếu: Đã gom đủ 20 frame HOẶC Đã gom hết số frame còn lại
+                        if self.frameQueue.qsize() > 20 or self.frameQueue.qsize() >= frames_left_in_video:
                             is_buffering = False
                             print("Resuming playback...")
                         else:
-                            time.sleep(0.01)
+                            time.sleep(0.01) # Ngủ chờ nạp thêm
                             continue
-                    # ------------------------------------
+                    # ---------------------------
 
-                    # --- QUAN TRỌNG: ĐÃ XÓA ĐOẠN "if qsize > 50" ---
-                    # Chúng ta không bỏ frame nào cả, có bao nhiêu phát bấy nhiêu
-                    # để đảm bảo video chạy mượt mà đúng tốc độ.
-                    
                     if self.frameQueue.empty():
                         time.sleep(0.01)
                         continue
@@ -268,9 +273,6 @@ class Client:
 
                     self.frameNbr = seq
                     self.updateMovie(imageData)
-                    
-                    # Tốc độ phát chuẩn: 0.04s ~ 25 FPS
-                    # Nếu muốn chậm hơn thì tăng số này (vd: 0.05), nhanh hơn thì giảm (vd: 0.03)
                     time.sleep(0.04) 
                     
                 except Exception as e:
