@@ -26,7 +26,6 @@ SOCKET-HD-STREAMING/
 ├── RtpPacket.py          # Class đóng gói/giải gói giao thức RTP
 ├── Server.py             # File khởi chạy Server 
 ├── ServerWorker.py       # Xử lý logic phía Server 
-├── testfile.py
 ├── VideoStream.py        # Class đọc file video 
 ```
 
