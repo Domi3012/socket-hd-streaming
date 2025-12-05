@@ -6,7 +6,6 @@ from io import BytesIO
 
 from RtpPacket import RtpPacket
 
-
 class Client:
     INIT = 0
     READY = 1
@@ -32,29 +31,24 @@ class Client:
         self.requestSent = -1
         self.teardownAcked = 0
 
-        # frame tracking
         self.frameNbr = 0
-        self.totalFrames = 1
-        self.maxCachedFrame = 0  # largest frame received so far
+        self.totalFrames = 500 # Mặc định
+        self.maxCachedFrame = 0 
 
-        # cache (seq -> frame data)
-        self.frameCache = {}
-        self.cacheLock = threading.Lock()
+        self.isTotalFrameLogged = False
+        self.frameQueue = queue.PriorityQueue()
+        self.received_frames_ids = set()
 
-        # threads
         self.stopThreads = False
         self.playEvent = None
         self.rtpThread = None
         self.playerThread = None
 
-        # seeking
         self.isSeeking = False
         self.wasPlaying = False
 
         self.createWidgets()
         self.connectToServer()
-
-    # ---------- GUI ----------
 
     def createWidgets(self):
         self.master.geometry("800x600")
@@ -84,8 +78,6 @@ class Client:
 
         self.updateProgressTimer()
 
-    # ---------- PROGRESS + SEEK ----------
-
     def _getTotalFramesForUI(self):
         return max(self.totalFrames, 1)
 
@@ -94,50 +86,33 @@ class Client:
             self.sendRtspRequest(self.SETUP)
 
     def onProgressClick(self, event):
-        if self.state not in (self.READY, self.PLAYING):
-            return
+        if self.state not in (self.READY, self.PLAYING): return
         self.isSeeking = True
         self.wasPlaying = (self.state == self.PLAYING)
-
-        # Nếu đang PLAY thì tạm dừng cả client + server (gửi PAUSE)
-        if self.wasPlaying:
-            self.pauseMovie()
-
-        # Cập nhật tạm thời vị trí thanh progress
+        if self.wasPlaying: self.pauseMovie()
         self._seekToPosition(event.x)
 
     def onProgressDrag(self, event):
-        if not self.isSeeking:
-            return
+        if not self.isSeeking: return
         w = self.progressCanvas.winfo_width()
-        if w <= 1:
-            return
+        if w <= 1: return
         total = self._getTotalFramesForUI()
         ratio = min(max(event.x / w, 0.0), 1.0)
         self.frameNbr = int(ratio * total)
         self._drawProgressBar()
 
     def onProgressRelease(self, event):
-        if not self.isSeeking:
-            return
-
+        if not self.isSeeking: return
         self.isSeeking = False
         target = self._seekToPosition(event.x)
-        print(f"[CLIENT] Seek to frame {target}")
-
-        # Xoá cache cũ, chuẩn bị nhận frame mới
         self.clearCache()
         self.frameNbr = target
-
         if self.wasPlaying:
-            # Trước đó đang PLAY: tua xong thì PLAY tiếp từ frame mới
             self.sendRtspRequest(self.PLAY, seekFrame=target)
             time.sleep(0.05)
             self.startPlayback()
         else:
-            # Trước đó đang PAUSE: chỉ đổi vị trí trên server, vẫn giữ trạng thái pause
             self.sendRtspRequest(self.PLAY, seekFrame=target)
-            # Gửi PAUSE ngay sau đó để server về lại READY
             self.sendRtspRequest(self.PAUSE)
 
     def _seekToPosition(self, x):
@@ -145,54 +120,56 @@ class Client:
         total = self._getTotalFramesForUI()
         ratio = min(max(x / w, 0.0), 1.0)
         target = int(ratio * total)
+        print(f"[Client] Dang tua den frame: {target}")
         self.frameNbr = target
         self._drawProgressBar()
         return target
 
     def clearCache(self):
-        with self.cacheLock:
-            self.frameCache.clear()
-            self.maxCachedFrame = self.frameNbr
+        while not self.frameQueue.empty():
+            try: self.frameQueue.get_nowait()
+            except: break
+        self.received_frames_ids.clear()
+        self.maxCachedFrame = self.frameNbr
 
     def _drawProgressBar(self):
-        try:
-            w = self.progressCanvas.winfo_width()
-            h = self.progressCanvas.winfo_height()
-            self.progressCanvas.delete("all")
+            try:
+                w = self.progressCanvas.winfo_width()
+                h = self.progressCanvas.winfo_height()
+                self.progressCanvas.delete("all")
+                
+                total = self._getTotalFramesForUI()
+                
+                # 1. Tính toán tỉ lệ
+                played_ratio = min(self.frameNbr / total, 1.0)
+                cached_ratio = min(self.maxCachedFrame / total, 1.0)
 
-            total = self._getTotalFramesForUI()
+                played_w = w * played_ratio
+                cached_w = w * cached_ratio
 
-            played = min(self.frameNbr / total, 1.0)
-            cached = min(self.maxCachedFrame / total, 1.0)
+                # 2. Vẽ Nền Đen (Toàn bộ video)
+                self.progressCanvas.create_rectangle(0, 0, w, h, fill="#111111", outline="")
 
-            played_w = w * played
-            cached_w = w * cached
+                # 3. Vẽ Thanh Xám (Buffer/Cache - Phần đã tải trước)
+                # Vẽ từ điểm 0 đến điểm maxCachedFrame
+                if cached_w > 0:
+                    self.progressCanvas.create_rectangle(0, 0, cached_w, h, fill="#555555", outline="")
 
-            # black background
-            self.progressCanvas.create_rectangle(0, 0, w, h, fill="black", outline="")
-
-            # gray cached
-            if cached_w > played_w:
-                self.progressCanvas.create_rectangle(played_w, 0, cached_w, h, fill="#777777", outline="")
-
-            # red played
-            self.progressCanvas.create_rectangle(0, 0, played_w, h, fill="red", outline="")
-
-            # white knob
-            self.progressCanvas.create_oval(
-                played_w - 5, h / 2 - 5,
-                played_w + 5, h / 2 + 5,
-                fill='white', outline=''
-            )
-        except:
-            pass
+                # 4. Vẽ Thanh Đỏ (Playback - Phần đang xem)
+                # Vẽ đè lên thanh xám
+                if played_w > 0:
+                    self.progressCanvas.create_rectangle(0, 0, played_w, h, fill="#E50914", outline="")
+                
+                # 5. Vẽ cục tròn màu trắng (Knob)
+                self.progressCanvas.create_oval(played_w-5, h/2-5, played_w+5, h/2+5, fill='white', outline='')
+                
+            except:
+                pass
 
     def updateProgressTimer(self):
         if not self.stopThreads:
             self._drawProgressBar()
             self.master.after(100, self.updateProgressTimer)
-
-    # ---------- CONTROL ----------
 
     def exitClient(self):
         self.stopThreads = True
@@ -211,111 +188,110 @@ class Client:
             self.startPlayback()
             self.sendRtspRequest(self.PLAY)
 
-    # ---------- THREADS ----------
-
     def startPlayback(self):
         self.stopThreads = False
         self.playEvent = threading.Event()
         self.playEvent.clear()
-
         if self.rtpThread is None or not self.rtpThread.is_alive():
             self.rtpThread = threading.Thread(target=self.listenRtp, daemon=True)
             self.rtpThread.start()
-
         if self.playerThread is None or not self.playerThread.is_alive():
             self.playerThread = threading.Thread(target=self.runPlayer, daemon=True)
             self.playerThread.start()
 
     def stopPlayback(self):
-        if self.playEvent:
-            self.playEvent.set()
-
-    # ---------- RTP RECEIVER (STORE BY SEQ ORDER) ----------
+        if self.playEvent: self.playEvent.set()
 
     def listenRtp(self):
-        try:
-            self.rtpSocket.settimeout(0.5)
-        except:
-            pass
-
-        while not self.stopThreads:
             try:
-                if self.playEvent.is_set():
-                    break
+                self.rtpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1048576) 
+                self.rtpSocket.settimeout(0.5)
+            except: pass
+            current_frame_buffer = b""
+            while not self.stopThreads:
+                try:
+                    if self.playEvent.is_set(): break
+                    data = self.rtpSocket.recv(65535)
+                    if not data: continue
+                    pkt = RtpPacket()
+                    pkt.decode(data)
+                    seq = pkt.seqNum()
+                    payload = pkt.getPayload()
+                    is_last_packet = (data[1] >> 7) & 1
+                    current_frame_buffer += payload
+                    if is_last_packet == 1:
+                        if seq > self.maxCachedFrame: self.maxCachedFrame = seq
+                        
+                        # LOGIC MỚI: Chỉ cập nhật totalFrames nếu nó lớn hơn giá trị server gửi
+                        # (đề phòng trường hợp hiếm hoi server đếm sai, nhưng thường là giữ nguyên)
+                        if seq > self.totalFrames: self.totalFrames = seq
 
-                data = self.rtpSocket.recv(65535)
-                if not data:
-                    continue
-
-                pkt = RtpPacket()
-                pkt.decode(data)
-                seq = pkt.seqNum()
-                payload = pkt.getPayload()
-
-                with self.cacheLock:
-                    self.frameCache[seq] = payload
-                    self.maxCachedFrame = max(self.maxCachedFrame, seq)
-
-            except socket.timeout:
-                continue
-            except:
-                break
-
-    # ---------- PLAYER (PLAY FRAMES IN ORDER) ----------
+                        if seq not in self.received_frames_ids:
+                            self.frameQueue.put((seq, current_frame_buffer))
+                            self.received_frames_ids.add(seq)
+                        current_frame_buffer = b""
+                except socket.timeout: continue
+                except: break
 
     def runPlayer(self):
-        FRAME_TIME = 1/25
+            is_buffering = True
+            while not self.stopThreads:
+                try:
+                    if self.playEvent.is_set(): break
+                    
+                    # --- LOGIC BUFFERING (Giữ nguyên) ---
+                    # Nếu sắp hết frame (dưới 5), tạm dừng để load thêm
+                    if self.frameQueue.qsize() < 5 and not is_buffering:
+                        is_buffering = True
+                        print("Buffering...")
+                    
+                    # Nếu đang buffering, đợi nạp đủ 20 frame mới chạy
+                    if is_buffering:
+                        if self.frameQueue.qsize() > 20: 
+                            is_buffering = False
+                            print("Resuming playback...")
+                        else:
+                            time.sleep(0.01)
+                            continue
+                    # ------------------------------------
 
-        while not self.stopThreads:
-            try:
-                if self.playEvent.is_set():
-                    break
-
-                with self.cacheLock:
-                    if not self.frameCache:
+                    # --- QUAN TRỌNG: ĐÃ XÓA ĐOẠN "if qsize > 50" ---
+                    # Chúng ta không bỏ frame nào cả, có bao nhiêu phát bấy nhiêu
+                    # để đảm bảo video chạy mượt mà đúng tốc độ.
+                    
+                    if self.frameQueue.empty():
                         time.sleep(0.01)
                         continue
 
-                    # ALWAYS take the smallest frame number
-                    seq = min(self.frameCache.keys())
-                    imageData = self.frameCache.pop(seq)
+                    seq, imageData = self.frameQueue.get()
+                    if seq in self.received_frames_ids: self.received_frames_ids.remove(seq)
 
-                self.frameNbr = seq
-                self.updateMovie(imageData)
-
-                if self.frameNbr >= self.totalFrames:
-                    self.frameNbr = self.totalFrames
-
-                time.sleep(FRAME_TIME)
-
-            except Exception as e:
-                print("Player error:", e)
-                break
-
-    # ---------- DISPLAY FRAME ----------
+                    self.frameNbr = seq
+                    self.updateMovie(imageData)
+                    
+                    # Tốc độ phát chuẩn: 0.04s ~ 25 FPS
+                    # Nếu muốn chậm hơn thì tăng số này (vd: 0.05), nhanh hơn thì giảm (vd: 0.03)
+                    time.sleep(0.04) 
+                    
+                except Exception as e:
+                    print("Player error:", e)
+                    break
 
     def updateMovie(self, imageData):
-        def update(img_bytes):
+        def update():
             try:
-                stream = BytesIO(img_bytes)
+                stream = BytesIO(imageData)
                 img = Image.open(stream)
-
                 fw = self.videoFrame.winfo_width()
                 fh = self.videoFrame.winfo_height()
-
-                iw, ih = img.size
-                ratio = min(fw / iw, fh / ih)
-                img = img.resize((int(iw * ratio), int(ih * ratio)), Image.BILINEAR)
-
+                if fw > 1 and fh > 1:
+                    iw, ih = img.size
+                    ratio = min(fw/iw, fh/ih)
+                    img = img.resize((int(iw*ratio), int(ih*ratio)), Image.BILINEAR)
                 photo = ImageTk.PhotoImage(img)
-                self.label.configure(image=photo)
-                self.label.image = photo
-            except:
-                pass
-
-        self.master.after(0, update, imageData)
-
-    # ---------- RTSP ----------
+                self.label.configure(image=photo); self.label.image = photo
+            except: pass
+        self.master.after_idle(update)
 
     def connectToServer(self):
         self.rtspSocket = socket.socket()
@@ -323,80 +299,54 @@ class Client:
 
     def sendRtspRequest(self, requestCode, seekFrame=None):
         self.rtspSeq += 1
-
         if requestCode == self.SETUP:
             threading.Thread(target=self.recvRtspReply, daemon=True).start()
-            msg = \
-                f"SETUP {self.fileName} RTSP/1.0\n" \
-                f"Cseq: {self.rtspSeq}\n" \
-                f"Transport: RTP/UDP; client_port: {self.rtpPort}"
-
+            msg = f"SETUP {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nTransport: RTP/UDP; client_port: {self.rtpPort}"
         elif requestCode == self.PLAY:
-            msg = \
-                f"PLAY {self.fileName} RTSP/1.0\n" \
-                f"Cseq: {self.rtspSeq}\n" \
-                f"Session: {self.sessionId}"
-
-            if seekFrame is not None:
-                msg += f"\nRange: frame={seekFrame}"
-
+            msg = f"PLAY {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nSession: {self.sessionId}"
+            if seekFrame is not None: msg += f"\nRange: npt={seekFrame}"
         elif requestCode == self.PAUSE:
-            msg = \
-                f"PAUSE {self.fileName} RTSP/1.0\n" \
-                f"Cseq: {self.rtspSeq}\n" \
-                f"Session: {self.sessionId}"
-
+            msg = f"PAUSE {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nSession: {self.sessionId}"
         elif requestCode == self.TEARDOWN:
-            msg = \
-                f"TEARDOWN {self.fileName} RTSP/1.0\n" \
-                f"Cseq: {self.rtspSeq}\n" \
-                f"Session: {self.sessionId}"
-
-        else:
-            return
-
+            msg = f"TEARDOWN {self.fileName} RTSP/1.0\nCseq: {self.rtspSeq}\nSession: {self.sessionId}"
+        else: return
         self.requestSent = requestCode
         self.rtspSocket.send(msg.encode())
-        print("\n>>> RTSP SENT >>>\n" + msg)
 
     def recvRtspReply(self):
         while True:
             try:
                 data = self.rtspSocket.recv(1024)
-                if data:
-                    self.parseRtspReply(data.decode())
-                if self.requestSent == self.TEARDOWN:
-                    return
-            except:
-                break
+                if data: self.parseRtspReply(data.decode())
+                if self.requestSent == self.TEARDOWN: return
+            except: break
 
     def parseRtspReply(self, data):
         lines = data.split('\n')
         code = int(lines[0].split(' ')[1])
         seq = int(lines[1].split(' ')[1])
-
-        if seq != self.rtspSeq:
-            return
-
+        if seq != self.rtspSeq: return
         session = int(lines[2].split(' ')[1])
-        if self.sessionId == 0:
-            self.sessionId = session
-
+        if self.sessionId == 0: self.sessionId = session
         if code == 200:
-            for line in lines[3:]:
-                if line.startswith("Frames:"):
-                    self.totalFrames = int(line.split(":")[1].strip())
-                    print("[CLIENT] Total frames:", self.totalFrames)
-
-            if self.requestSent == self.SETUP:
-                self.state = self.READY
-                self.openRtpPort()
-            elif self.requestSent == self.PLAY:
-                self.state = self.PLAYING
-            elif self.requestSent == self.PAUSE:
-                self.state = self.READY
-            elif self.requestSent == self.TEARDOWN:
-                self.state = self.INIT
+            # --- LOGIC MỚI: Đọc tổng số frame từ Server ---
+            for line in lines:
+                if "Frames:" in line:
+                    try: 
+                        val = int(line.split(":")[1].strip())
+                        self.totalFrames = val
+                        
+                        # Chỉ in nết chưa từng in trước đó
+                        if not self.isTotalFrameLogged:
+                            print(f"[Client] Tong so frame video: {self.totalFrames}")
+                            self.isTotalFrameLogged = True
+                    except: pass
+            # ---------------------------------------------
+            
+            if self.requestSent == self.SETUP: self.state = self.READY; self.openRtpPort()
+            elif self.requestSent == self.PLAY: self.state = self.PLAYING
+            elif self.requestSent == self.PAUSE: self.state = self.READY
+            elif self.requestSent == self.TEARDOWN: self.state = self.INIT
 
     def openRtpPort(self):
         self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -405,7 +355,5 @@ class Client:
 
     def handler(self):
         self.pauseMovie()
-        if tkinter.messagebox.askokcancel("Quit?", "Quit the player?"):
-            self.exitClient()
-        else:
-            self.playMovie()
+        if tkinter.messagebox.askokcancel("Quit?", "Quit?"): self.exitClient()
+        else: self.playMovie()
