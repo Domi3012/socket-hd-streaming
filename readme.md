@@ -17,7 +17,7 @@ SOCKET-HD-STREAMING/
 │
 ├── CountFrame            # Thư mục chứa file .count đếm tổng số frame
 ├── RawVideo              # Thư mục chưa Video chưa qua xử lí định dạng
-├── StandarizedVideo      # Thư mục chứa Video đã được xử lí định dạng 
+├── StandardizedVideo      # Thư mục chứa Video đã được xử lí định dạng 
 ├── Client.py             # Xử lý logic phía Client 
 ├── ClientLauncher.py     # File khởi chạy Client 
 ├── converter.py          # Tool tiện ích: Chuyển đổi định dạng video
@@ -29,21 +29,32 @@ SOCKET-HD-STREAMING/
 ├── VideoStream.py        # Class đọc file video 
 ```
 
-## 3. Các bước chạy chương trình 
+## 3. Hướng Dẫn Cài Đặt & Vận Hành
 
-### Bước 1: Chuẩn bị dữ liệu
+### Giai đoạn 1: Chuẩn bị dữ liệu 
+
+**Bước 1:** Sao chép các video cần phát vào thư mục `RawVideo`.
+
+**Bước 2:** Chạy công cụ chuẩn hóa định dạng video (Convert sang Mjpeg).
 ```bash
 python converter.py
 ```
-### Bước 2: Chuẩn bị dữ liệu 
+
+**Bước 3:** Chạy công cụ đếm tổng số frame của video.
 ```bash
 python prepare_video.py
 ```
-### Bước 3: Khởi tạo server (Terminal thứ 1)
+
+### Giai đoạn 2: Chạy chương trình 
+
+**Bước 4:** Mở terminal đầu tiên và chạy câu lệnh 
 ```bash
-python Server.py 8888 
+# Cú pháp: python Server.py <Server_Port>
+python Server.py 8888
 ```
-### Bước 4: Chạy video (Terminal thứ 2)
+
+**Bước 5:** Mở terminal thứ hai và chạy câu lệnh tương ứng 
 ```bash
-python ClientLauncher.py 127.0.0.1 8888 5000 <Video bạn muốn chạy>.Mjpeg
+# Cú pháp: python ClientLauncher.py <Server_IP> <Server_Port> <RTP_Port> <Video_Name>.Mjpeg
+python ClientLauncher.py 127.0.0.1 8888 5000 movie.Mjpeg
 ```
